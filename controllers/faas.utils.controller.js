@@ -6,6 +6,7 @@ const dataStackUtils = require('@appveen/data.stack-utils');
 const queryUtils = require('../utils/query.utils');
 const k8sUtils = require('../utils/k8s.utils');
 const config = require('../config');
+const commonUtils = require('../utils/common.utils');
 
 const logger = log4js.getLogger(global.loggerName);
 const faasModel = mongoose.model('faas');
@@ -17,8 +18,8 @@ if (dockerRegistryType.length > 0) dockerRegistryType = dockerRegistryType.toUpp
 let dockerReg = process.env.DOCKER_REGISTRY_SERVER ? process.env.DOCKER_REGISTRY_SERVER : '';
 if (dockerReg.length > 0 && !dockerReg.endsWith('/') && dockerRegistryType != 'ECR') dockerReg += '/';
 
-let faasBaseImage = `${dockerReg}datanimbus.io.faas.base:${config.imageTag}`;
-if (dockerRegistryType == 'ECR') faasBaseImage = `${dockerReg}:datanimbus.io.faas.base:${config.imageTag}`;
+// let faasBaseImage = `${dockerReg}datanimbus.io.faas.base:${config.imageTag}`;
+// if (dockerRegistryType == 'ECR') faasBaseImage = `${dockerReg}:datanimbus.io.faas.base:${config.imageTag}`;
 
 router.get('/count', async (req, res) => {
 	try {
@@ -48,7 +49,7 @@ router.get('/status/count', async (req, res) => {
 			filter.app = req.locals.app;
 			filter['_metadata.deleted'] = false;
 		}
-		
+
 		let aggregateQuery = [
 			{ $match: filter },
 			{
@@ -59,7 +60,7 @@ router.get('/status/count', async (req, res) => {
 			}
 		];
 		let result = await faasModel.aggregate(aggregateQuery);
-		
+
 		let response = {};
 		let total = 0;
 		result.forEach(rs => {
@@ -67,7 +68,7 @@ router.get('/status/count', async (req, res) => {
 			total += rs.count;
 		});
 		response['Total'] = total;
-		
+
 		return res.json(response);
 	} catch (err) {
 		logger.error(err);
@@ -108,6 +109,7 @@ router.put('/:id/init', async (req, res) => {
 router.put('/:id/deploy', async (req, res) => {
 	try {
 		let id = req.params.id;
+		let app = req.params.app;
 		let txnId = req.header('txnId');
 		let socket = req.app.get('socket');
 
@@ -119,11 +121,16 @@ router.put('/:id/deploy', async (req, res) => {
 
 		logger.debug(`[${txnId}] User details - ${JSON.stringify({ user, isSuperAdmin, verifyDeploymentUser })}`);
 
-		let doc = await faasModel.findOne({ _id: id, '_metadata.deleted': false });
+		let doc = await faasModel.findOne({ _id: id, app: app, '_metadata.deleted': false });
 		if (!doc) {
-			logger.error(`[${txnId}] Faas data not found for id :: ${id}`);
+			logger.error(`[${txnId}] Faas data not found for id :: ${id} in app :: ${app}`);
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
+		const appData = await commonUtils.getApp(req, doc.app);
+		if (!appData.body.faasBaseImage) {
+			return res.status(400).json({ message: 'Base Image not Set' });
+		}
+		let faasBaseImage = appData.body.faasBaseImage;
 		const oldFaasObj = doc.toObject();
 		logger.debug(`[${txnId}] Faas data found`);
 		logger.trace(`[${txnId}] Faas data found :: ${JSON.stringify(doc)}`);
@@ -143,7 +150,7 @@ router.put('/:id/deploy', async (req, res) => {
 		} else {
 			logger.debug(`[${txnId}] Faas is not in draft status, checking in draft collection :: ${doc.status}`);
 
-			const draftDoc = await faasDraftModel.findOne({ _id: id, '_metadata.deleted': false });
+			const draftDoc = await faasDraftModel.findOne({ _id: id, app: app, '_metadata.deleted': false });
 
 			if (!draftDoc) {
 				logger.error(`[${txnId}] Faas has no draft version for deployment`);
@@ -187,7 +194,9 @@ router.put('/:id/deploy', async (req, res) => {
 			doc.image = faasBaseImage;
 			const service = await k8sUtils.upsertService(doc);
 			const status = await k8sUtils.upsertFaasDeployment(doc);
-			if ((status.statusCode !== 200 && status.statusCode !== 202) || (service.statusCode !== 200 && service.statusCode !== 202)) {
+			logger.debug(`Upsert service status :: ${service.statusCode}`);
+			logger.debug(`Upsert deployment status :: ${status.statusCode}`);
+			if ((status.statusCode <= 200 || status.statusCode >= 202) || (service.statusCode <= 200 || service.statusCode >= 202)) {
 				return res.status(status.statusCode).json({ message: 'Unable to deploy function' });
 			}
 		}
@@ -209,10 +218,15 @@ router.put('/:id/deploy', async (req, res) => {
 
 router.put('/:id/repair', async (req, res) => {
 	try {
-		const doc = await faasModel.findById(req.params.id).lean();
+		const doc = await faasModel.findOne({ _id: req.params.id, app: req.params.app }).lean();
 		if (!doc) {
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
+		const appData = await commonUtils.getApp(req, doc.app);
+		if (!appData.body.faasBaseImage) {
+			return res.status(400).json({ message: 'Base Image not Set' });
+		}
+		let faasBaseImage = appData.body.faasBaseImage;
 		doc.image = faasBaseImage;
 		let service = await k8sUtils.deleteService(doc);
 		service = await k8sUtils.upsertService(doc);
@@ -243,7 +257,7 @@ router.put('/:id/start', async (req, res) => {
 		let socket = req.app.get('socket');
 		logger.info(`[${txnId}] Function start request received :: ${id}`);
 
-		const doc = await faasModel.findById(req.params.id);
+		const doc = await faasModel.findOne({ _id: req.params.id, app: req.params.app });
 		if (!doc) {
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
@@ -307,7 +321,7 @@ router.put('/:id/stop', async (req, res) => {
 		let socket = req.app.get('socket');
 		logger.info(`[${txnId}] Function stop request received :: ${id}`);
 
-		const doc = await faasModel.findById(req.params.id);
+		const doc = await faasModel.findOne({ _id: req.params.id, app: req.params.app });
 		if (!doc) {
 			return res.status(404).json({ message: 'Invalid Function' });
 		}
@@ -513,13 +527,13 @@ router.put('/:id/draftDelete', async (req, res) => {
 		let txnId = req.get('TxnId');
 		logger.info(`[${txnId}] Function draft delete request received :: ${id}`);
 
-		let doc = await faasModel.findById(id);
+		let doc = await faasModel.findOne({ _id: id, app: req.params.app });
 		if (!doc) {
 			logger.error(`[${txnId}] Function data not found for id :: ${id}`);
 			return res.status(404).json({ message: 'Invalid Function' });
 		}
 
-		let draftDoc = await faasDraftModel.findById(id);
+		let draftDoc = await faasDraftModel.findOne({ _id: id, app: req.params.app });
 		if (!draftDoc) {
 			logger.debug(`[${txnId}] Function draft data not found for id :: ${id}`);
 		}
@@ -559,7 +573,7 @@ router.put('/:id/statusChange', async (req, res) => {
 
 	logger.info(`[${req.get('TxnId')}] Faas status update params - ${JSON.stringify({ id, status })}`);
 	try {
-		const doc = await faasModel.findById(id);
+		const doc = await faasModel.findOne({ _id: id, app: req.params.app });
 		if (!doc) {
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
