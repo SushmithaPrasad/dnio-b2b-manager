@@ -18,8 +18,8 @@ if (dockerRegistryType.length > 0) dockerRegistryType = dockerRegistryType.toUpp
 let dockerReg = process.env.DOCKER_REGISTRY_SERVER ? process.env.DOCKER_REGISTRY_SERVER : '';
 if (dockerReg.length > 0 && !dockerReg.endsWith('/') && dockerRegistryType != 'ECR') dockerReg += '/';
 
-// let faasBaseImage = `${dockerReg}datanimbus.io.faas.base:${config.imageTag}`;
-// if (dockerRegistryType == 'ECR') faasBaseImage = `${dockerReg}:datanimbus.io.faas.base:${config.imageTag}`;
+let faasBaseImage = `${dockerReg}datanimbus.io.faas.base:${config.imageTag}`;
+if (dockerRegistryType == 'ECR') faasBaseImage = `${dockerReg}:datanimbus.io.faas.base:${config.imageTag}`;
 
 router.get('/count', async (req, res) => {
 	try {
@@ -117,9 +117,8 @@ router.put('/:id/deploy', async (req, res) => {
 
 		let user = req.user;
 		let isSuperAdmin = user.isSuperAdmin;
-		let verifyDeploymentUser = config.verifyDeploymentUser;
 
-		logger.debug(`[${txnId}] User details - ${JSON.stringify({ user, isSuperAdmin, verifyDeploymentUser })}`);
+		logger.debug(`[${txnId}] User details - ${JSON.stringify({ user, isSuperAdmin })}`);
 
 		let doc = await faasModel.findOne({ _id: id, app: app, '_metadata.deleted': false });
 		if (!doc) {
@@ -127,10 +126,12 @@ router.put('/:id/deploy', async (req, res) => {
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
 		const appData = await commonUtils.getApp(req, doc.app);
-		if (!appData.body.faasBaseImage) {
-			return res.status(400).json({ message: 'Base Image not Set' });
+		// if (!appData.body.faasBaseImage) {
+		// 	return res.status(400).json({ message: 'Base Image not Set' });
+		// }
+		if (appData.body.faasBaseImage) {
+			faasBaseImage = appData.body.faasBaseImage;
 		}
-		let faasBaseImage = appData.body.faasBaseImage;
 		const oldFaasObj = doc.toObject();
 		logger.debug(`[${txnId}] Faas data found`);
 		logger.trace(`[${txnId}] Faas data found :: ${JSON.stringify(doc)}`);
@@ -143,10 +144,10 @@ router.put('/:id/deploy', async (req, res) => {
 			return res.status(400).json({ message: 'No changes to redeploy' });
 		} else if (doc.status === 'Draft') {
 			logger.debug(`[${txnId}] Faas is in Draft status`);
-			if (verifyDeploymentUser && !isSuperAdmin && doc._metadata && doc._metadata.lastUpdatedBy == user) {
-				logger.error(`[${txnId}] Self deployment not allowed ::  ${{ lastUpdatedBy: doc._metadata.lastUpdatedBy, currentUser: user }}`);
-				return res.status(403).json({ message: 'You cannot deploy your own changes' });
-			}
+			// if (verifyDeploymentUser && !isSuperAdmin && doc._metadata && doc._metadata.lastUpdatedBy == user) {
+			// 	logger.error(`[${txnId}] Self deployment not allowed ::  ${{ lastUpdatedBy: doc._metadata.lastUpdatedBy, currentUser: user }}`);
+			// 	return res.status(403).json({ message: 'You cannot deploy your own changes' });
+			// }
 		} else {
 			logger.debug(`[${txnId}] Faas is not in draft status, checking in draft collection :: ${doc.status}`);
 
@@ -159,10 +160,10 @@ router.put('/:id/deploy', async (req, res) => {
 			logger.debug(`[${txnId}] Faas data found in draft collection`);
 			logger.trace(`[${txnId}] Faas draft data :: ${JSON.stringify(draftDoc)}`);
 
-			if (verifyDeploymentUser && !isSuperAdmin && draftDoc._metadata && draftDoc._metadata.lastUpdatedBy == user) {
-				logger.error(`[${txnId}] Self deployment not allowed :: ${{ lastUpdatedBy: draftDoc._metadata.lastUpdatedBy, currentUser: user }}`);
-				return res.status(400).json({ message: 'You cannot deploy your own changes' });
-			}
+			// if (verifyDeploymentUser && !isSuperAdmin && draftDoc._metadata && draftDoc._metadata.lastUpdatedBy == user) {
+			// 	logger.error(`[${txnId}] Self deployment not allowed :: ${{ lastUpdatedBy: draftDoc._metadata.lastUpdatedBy, currentUser: user }}`);
+			// 	return res.status(400).json({ message: 'You cannot deploy your own changes' });
+			// }
 
 			if (draftDoc && draftDoc.app != doc.app) {
 				logger.error(`[${txnId}] App change not permitted`);
@@ -196,8 +197,8 @@ router.put('/:id/deploy', async (req, res) => {
 			const status = await k8sUtils.upsertFaasDeployment(doc);
 			logger.debug(`Upsert service status :: ${service.statusCode}`);
 			logger.debug(`Upsert deployment status :: ${status.statusCode}`);
-			if ((status.statusCode <= 200 || status.statusCode >= 202) || (service.statusCode <= 200 || service.statusCode >= 202)) {
-				return res.status(status.statusCode).json({ message: 'Unable to deploy function' });
+			if ((status.statusCode < 200 || status.statusCode > 202) || (service.statusCode < 200 || service.statusCode > 202)) {
+				return res.status(400).json({ message: 'Unable to deploy function' });
 			}
 		}
 
@@ -223,10 +224,12 @@ router.put('/:id/repair', async (req, res) => {
 			return res.status(400).json({ message: 'Invalid Function' });
 		}
 		const appData = await commonUtils.getApp(req, doc.app);
-		if (!appData.body.faasBaseImage) {
-			return res.status(400).json({ message: 'Base Image not Set' });
+		// if (!appData.body.faasBaseImage) {
+		// 	return res.status(400).json({ message: 'Base Image not Set' });
+		// }
+		if (appData.body.faasBaseImage) {
+			faasBaseImage = appData.body.faasBaseImage;
 		}
-		let faasBaseImage = appData.body.faasBaseImage;
 		doc.image = faasBaseImage;
 		let service = await k8sUtils.deleteService(doc);
 		service = await k8sUtils.upsertService(doc);

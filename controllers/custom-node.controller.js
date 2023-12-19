@@ -23,7 +23,9 @@ router.get('/utils/count', async (req, res) => {
 
 router.get('/', async (req, res) => {
 	try {
+		let app = req.params.app;
 		const filter = queryUtils.parseFilter(req.query.filter);
+		filter.app = app;
 		if (req.query.countOnly) {
 			const count = await nodeModel.countDocuments(filter);
 			return res.status(200).json(count);
@@ -104,14 +106,14 @@ router.delete('/:id', async (req, res) => {
 		let doc = await nodeModel.findById(req.params.id);
 		if (!doc) {
 			return res.status(404).json({
-				message: 'Node Not Found'
+				message: 'Plugin Not Found'
 			});
 		}
 		doc._req = req;
 		let status = await doc.remove();
-		logger.debug('Node Deleted', status);
+		logger.debug('Plugin Deleted', status);
 		res.status(200).json({
-			message: 'Node Deleted'
+			message: 'Plugin Deleted'
 		});
 	} catch (err) {
 		logger.error(err);

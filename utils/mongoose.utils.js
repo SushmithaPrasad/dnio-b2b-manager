@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const _ = require('lodash');
+const config = require('../config');
 
 function MakeSchema(definition, options) {
 	if (definition) {
@@ -95,7 +96,7 @@ function metadataPlugin() {
 				self._metadata.version = {};
 			}
 			if (self._metadata.version) {
-				self._metadata.version.release = process.env.RELEASE || 'dev';
+				self._metadata.version.release = config.release || 'dev';
 			}
 			if (!self._metadata.version.document) {
 				self._metadata.version.document = 0;
@@ -119,46 +120,34 @@ function generateId(prefix, counterName, suffix, padding, counter) {
 		if (this._id) {
 			return next();
 		}
-		if (padding && typeof padding !== 'number') {
-			throw new Error('Padding is not a number');
-		}
-		if (counter && typeof counter !== 'number') {
-			throw new Error('Counter is not a number');
-		}
-		const doc = await getCount(counterName);
-		let tempId = parseInt(doc.next + '', 10);
-		if (counter && counter > 0) {
-			tempId = parseInt(doc.next + '', 10) + counter;
-		}
-		if (padding && padding > 0) {
-			tempId = _.padStart(tempId + '', padding, '0');
-		}
-		if (prefix) {
-			tempId = prefix + tempId;
-		}
-		if (suffix) {
-			tempId = tempId + suffix;
-		}
-		// prefix = prefix ? prefix : '';
-		// suffix = suffix ? suffix : '';
-		// let id = null;
-		// if (counter || counter === 0) {
-
-		// 	let nextNo = padding ? Math.pow(10, padding) + doc.next : doc.next;
-		// 	nextNo = (nextNo || 0).toString();
-		// 	if (padding && parseInt(nextNo.substr(0, 1)) > 1) {
-		// 		throw new Error('length of _id is exceeding counter');
-		// 	}
-		// 	id = padding ? prefix + nextNo.substr(1) + suffix : prefix + nextNo + suffix;
-		// } else if (padding) {
-		// 	id = prefix + rand(padding) + suffix;
-		// } else {
-		// 	const doc = await getCount(counterName);
-		// 	id = prefix + doc.next;
-		// }
+		let tempId = await createId(prefix, counterName, suffix, padding, counter);
 		this._id = tempId;
 		next();
 	};
+}
+
+async function createId(prefix, counterName, suffix, padding, counter) {
+	if (padding && typeof padding !== 'number') {
+		throw new Error('Padding is not a number');
+	}
+	if (counter && typeof counter !== 'number') {
+		throw new Error('Counter is not a number');
+	}
+	const doc = await getCount(counterName);
+	let tempId = parseInt(doc.next + '', 10);
+	if (counter && counter > 0) {
+		tempId = parseInt(doc.next + '', 10) + counter;
+	}
+	if (padding && padding > 0) {
+		tempId = _.padStart(tempId + '', padding, '0');
+	}
+	if (prefix) {
+		tempId = prefix + tempId;
+	}
+	if (suffix) {
+		tempId = tempId + suffix;
+	}
+	return tempId;
 }
 
 
@@ -176,6 +165,7 @@ async function getCount(counterName) {
 // }
 
 
+module.exports.createId = createId;
 module.exports.generateId = generateId;
 module.exports.metadataPlugin = metadataPlugin;
 module.exports.MakeSchema = MakeSchema;

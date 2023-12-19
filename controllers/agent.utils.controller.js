@@ -8,7 +8,7 @@ const FormData = require('form-data');
 const { v4: uuid } = require('uuid');
 const { zip } = require('zip-a-folder');
 const { exec } = require('child_process');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 const config = require('../config');
 const queryUtils = require('../utils/query.utils');
@@ -276,21 +276,85 @@ router.delete('/:id/session', async (req, res) => {
 
 router.put('/:id/stop', async (req, res) => {
 	try {
-		let doc = await agentModel.findById({ agentId: req.params.id }).lean();
+		let doc = await agentModel.findById({ _id: req.params.id });
 		if (!doc) {
 			return res.status(404).json({
 				message: 'Agent Not Found'
 			});
 		}
+		doc.status = 'STOPPED';
+		let status = await doc.save();
+		logger.debug('Agent Stop Status Updated ', status);
 		const actionDoc = new agentActionModel({
 			agentId: doc.agentId,
 			action: 'AGENT-STOPPED'
 		});
 		actionDoc._req = req;
-		let status = await actionDoc.save();
+		status = await actionDoc.save();
 		status = await cacheUtils.endSession(req.params.id);
 		logger.debug('Agent Stop Triggered ', status);
 		return res.status(200).json({ message: 'Agent Stop Triggered' });
+	} catch (err) {
+		logger.error(err);
+		res.status(500).json({
+			message: err.message
+		});
+	}
+});
+
+router.put('/:id/disable', async (req, res) => {
+	try {
+		let doc = await agentModel.findById({ _id: req.params.id });
+		let oldStatus = doc.status;
+		if (!doc) {
+			return res.status(404).json({
+				message: 'Agent Not Found'
+			});
+		}
+		doc.status = 'STOPPED';
+		doc.active = false;
+		let status = await doc.save();
+		logger.debug('Agent Disable Status Updated ', status);
+		if (oldStatus === 'RUNNING') {
+			const actionDoc = new agentActionModel({
+				agentId: doc.agentId,
+				action: 'AGENT-DISABLED'
+			});
+			actionDoc._req = req;
+			status = await actionDoc.save();
+		}
+		status = await cacheUtils.endSession(req.params.id);
+		logger.debug('Agent Disable Triggered ', status);
+		return res.status(200).json({ message: 'Agent Disable Triggered' });
+	} catch (err) {
+		logger.error(err);
+		res.status(500).json({
+			message: err.message
+		});
+	}
+});
+
+router.put('/:id/enable', async (req, res) => {
+	try {
+		let doc = await agentModel.findById({ _id: req.params.id });
+		if (!doc) {
+			return res.status(404).json({
+				message: 'Agent Not Found'
+			});
+		}
+		doc.status = 'STOPPED';
+		doc.active = true;
+		let status = await doc.save();
+		logger.debug('Agent Enable Status Updated ', status);
+		const actionDoc = new agentActionModel({
+			agentId: doc.agentId,
+			action: 'AGENT-ENABLED'
+		});
+		actionDoc._req = req;
+		status = await actionDoc.save();
+		status = await cacheUtils.endSession(req.params.id);
+		logger.debug('Agent Enable Triggered ', status);
+		return res.status(200).json({ message: 'Agent Enable Triggered' });
 	} catch (err) {
 		logger.error(err);
 		res.status(500).json({
@@ -388,6 +452,10 @@ router.post('/:id/upload', async (req, res) => {
 
 				let chunkChecksumList = uploadHeaders.chunkChecksum;
 
+				const index = doc.nodes.findIndex(node => node.type === 'FILE');
+				let outputObj = doc.nodes[index];
+				uploadHeaders.outputDirectory = outputObj.options.outputDirectories;
+
 				let downloadMetaDataObj = generateFileDownloadMetaData(uploadHeaders, fileDetails.filename, chunkChecksumList, targentAgentId);
 				agentEvent = helpers.constructAgentEvent(req, targentAgentId, uploadHeaders, 'DOWNLOAD_REQUEST', downloadMetaDataObj);
 				const downloadActionDoc = new agentActionModel(agentEvent);
@@ -421,8 +489,9 @@ router.post('/:id/upload', async (req, res) => {
 					const fileExtension = reqFile.name.split('.').pop();
 					logger.trace('File extension - ', fileExtension);
 					if (fileExtension === 'xlsx' || fileExtension === 'xls') {
-						const wb = XLSX.read(Buffer.from(decryptedData, 'base64'));
-						XLSX.writeFile(wb, './uploads/' + reqFile.name, { bookType: 'xlsx', type: 'binary', compression: true });
+						const workbook = new ExcelJS.Workbook();
+						await workbook.xlsx.load(Buffer.from(decryptedData, 'base64'));
+						await workbook.xlsx.writeFile('./uploads/' + reqFile.name);
 					} else {
 						fs.writeFileSync('./uploads/' + reqFile.name, Buffer.from(decryptedData, 'base64').toString());
 						// fs.writeFileSync('./uploads/' + reqFile.name, decryptedData);
@@ -599,7 +668,8 @@ router.get('/:id/download/exec', async (req, res) => {
 			'central-folder': '.',
 			'heartbeat-frequency': config.hbFrequency,
 			'log-level': process.env.LOG_LEVEL || 'info',
-			'sentinel-port-number': '54321'
+			'sentinel-port-number': '54321',
+			'poller-frequency': '60'
 		};
 		logger.trace('config initialized - ', agentConfig);
 		let confStr = createConf(agentConfig);
@@ -703,6 +773,16 @@ router.post('/:id/agentAction', async (req, res) => {
 		logger.trace('Agent Action payload -', payload);
 		logger.trace('Agent Action payload.metaDataInfo -', payload.metaDataInfo);
 		logger.trace('Agent Action payload.eventDetails -', payload.eventDetails);
+
+		const doc = await flowModel.findById(payload.eventDetails.flowId);
+		if (!doc) {
+			return res.status(400).json({ message: 'Invalid Flow' });
+		}
+
+		const index = doc.nodes.findIndex(node => node.type === 'FILE');
+		let outputObj = doc.nodes[index];
+		payload.metaDataInfo.outputDirectory = outputObj.options.outputDirectories;
+		// payload.metaDataInfo.mirrorDirectory = outputObj.options.mirrorInputDirectories;
 
 		if (action === 'download') {
 			let downloadMetaDataObj = generateFileDownloadMetaData(payload.metaDataInfo, payload.metaDataInfo.fileID, '', targentAgentId);
@@ -818,6 +898,8 @@ function generateFileDownloadMetaData(metaDataInfo, fileId, chunkChecksumList, a
 	metaData.totalChunks = metaDataInfo.totalChunks;
 	metaData.fileLocation = metaDataInfo.fileLocation;
 	metaData.downloadAgentID = agentId;
+	metaData.outputDirectory = generateOutputDirectoriesForAgent(metaDataInfo.outputDirectory);
+	// metaData.mirrorDirectory = metaDataInfo.mirrorDirectory;
 	return metaData;
 }
 
@@ -874,4 +956,11 @@ function generateFileProcessedErrorMetaData(metaDataInfo, errorMsg) {
 	return metaData;
 }
 
+function generateOutputDirectoriesForAgent(outputDirectories) {
+	let outputDirectory = [];
+	outputDirectories.forEach(directory => {
+		outputDirectory.push(directory.path);
+	});
+	return outputDirectory;
+}
 module.exports = router;

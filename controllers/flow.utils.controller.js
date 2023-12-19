@@ -25,8 +25,8 @@ if (dockerRegistryType.length > 0) dockerRegistryType = dockerRegistryType.toUpp
 let dockerReg = process.env.DOCKER_REGISTRY_SERVER ? process.env.DOCKER_REGISTRY_SERVER : '';
 if (dockerReg.length > 0 && !dockerReg.endsWith('/') && dockerRegistryType != 'ECR') dockerReg += '/';
 
-// let flowBaseImage = `${dockerReg}datanimbus.io.b2b.base:${config.imageTag}`;
-// if (dockerRegistryType == 'ECR') flowBaseImage = `${dockerReg}:datanimbus.io.b2b.base:${config.imageTag}`;
+let flowBaseImage = `${dockerReg}datanimbus.io.b2b.base:${config.imageTag}`;
+if (dockerRegistryType == 'ECR') flowBaseImage = `${dockerReg}:datanimbus.io.b2b.base:${config.imageTag}`;
 
 
 router.get('/count', async (req, res) => {
@@ -228,9 +228,8 @@ router.put('/:id/deploy', async (req, res) => {
 
 		let user = req.user;
 		let isSuperAdmin = user.isSuperAdmin;
-		let verifyDeploymentUser = config.verifyDeploymentUser;
 
-		logger.debug(`[${txnId}] User details - ${JSON.stringify({ user, isSuperAdmin, verifyDeploymentUser })}`);
+		logger.debug(`[${txnId}] User details - ${JSON.stringify({ user, isSuperAdmin })}`);
 
 		const doc = await flowModel.findById(id);
 		if (!doc) {
@@ -238,11 +237,12 @@ router.put('/:id/deploy', async (req, res) => {
 			return res.status(400).json({ message: 'Invalid Flow' });
 		}
 		const appData = await commonUtils.getApp(req, doc.app);
-		if (!appData.body.b2bBaseImage) {
-			return res.status(400).json({ message: 'Base Image not Set' });
+		// if (!appData.body.b2bBaseImage) {
+		// 	return res.status(400).json({ message: 'Base Image not Set' });
+		// }
+		if (appData.body.b2bBaseImage) {
+			flowBaseImage = appData.body.b2bBaseImage;
 		}
-		let flowBaseImage = appData.body.b2bBaseImage;
-
 		const oldFlowObj = JSON.parse(JSON.stringify(doc));
 		logger.debug(`[${txnId}] Flow data found`);
 		logger.trace(`[${txnId}] Flow data found :: ${JSON.stringify(doc)}`);
@@ -256,10 +256,10 @@ router.put('/:id/deploy', async (req, res) => {
 			return res.status(400).json({ message: 'No changes to redeploy' });
 		} else if (doc.status === 'Draft') {
 			logger.debug(`[${txnId}] Flow is in Draft status`);
-			if (verifyDeploymentUser && !isSuperAdmin && doc._metadata && doc._metadata.lastUpdatedBy == user) {
-				logger.error(`[${txnId}] Self deployment not allowed ::  ${{ lastUpdatedBy: doc._metadata.lastUpdatedBy, currentUser: user }}`);
-				return res.status(403).json({ message: 'You cannot deploy your own changes' });
-			}
+			// if (verifyDeploymentUser && !isSuperAdmin && doc._metadata && doc._metadata.lastUpdatedBy == user) {
+			// 	logger.error(`[${txnId}] Self deployment not allowed ::  ${{ lastUpdatedBy: doc._metadata.lastUpdatedBy, currentUser: user }}`);
+			// 	return res.status(403).json({ message: 'You cannot deploy your own changes' });
+			// }
 		} else {
 			logger.debug(`[${txnId}] Flow is not in draft status, checking in draft collection :: ${doc.status}`);
 
@@ -272,10 +272,10 @@ router.put('/:id/deploy', async (req, res) => {
 			logger.debug(`[${txnId}] Flow data found in draft collection`);
 			logger.trace(`[${txnId}] Flow draft data :: ${JSON.stringify(draftDoc)}`);
 
-			if (verifyDeploymentUser && !isSuperAdmin && draftDoc._metadata && draftDoc._metadata.lastUpdatedBy == user) {
-				logger.error(`[${txnId}] Self deployment not allowed :: ${{ lastUpdatedBy: draftDoc._metadata.lastUpdatedBy, currentUser: user }}`);
-				return res.status(400).json({ message: 'You cannot deploy your own changes' });
-			}
+			// if (verifyDeploymentUser && !isSuperAdmin && draftDoc._metadata && draftDoc._metadata.lastUpdatedBy == user) {
+			// 	logger.error(`[${txnId}] Self deployment not allowed :: ${{ lastUpdatedBy: draftDoc._metadata.lastUpdatedBy, currentUser: user }}`);
+			// 	return res.status(400).json({ message: 'You cannot deploy your own changes' });
+			// }
 
 			if (draftDoc && draftDoc.app != doc.app) {
 				logger.error(`[${txnId}] App change not permitted`);
@@ -306,14 +306,11 @@ router.put('/:id/deploy', async (req, res) => {
 
 			await doc.save();
 
-			let status = await k8sUtils.upsertService(doc);
-			status = await k8sUtils.upsertDeployment(doc);
+			let srvcStatus = await k8sUtils.upsertService(doc);
+			let depStatus = await k8sUtils.upsertDeployment(doc);
 
-			logger.info('Deploy API called');
-			logger.debug(status);
-
-			if (status.statusCode != 200 && status.statusCode != 202) {
-				return res.status(status.statusCode).json({ message: 'Unable to deploy Flow' });
+			if ((srvcStatus.statusCode < 200 || srvcStatus.statusCode > 202) || (depStatus.statusCode < 200 || depStatus.statusCode > 202)) {
+				return res.status(400).json({ message: 'Unable to deploy Flow' });
 			}
 
 
@@ -381,11 +378,12 @@ router.put('/:id/repair', async (req, res) => {
 			return res.status(400).json({ message: 'Invalid Flow' });
 		}
 		const appData = await commonUtils.getApp(req, doc.app);
-		if (!appData.body.b2bBaseImage) {
-			return res.status(400).json({ message: 'Base Image not Set' });
+		// if (!appData.body.b2bBaseImage) {
+		// 	return res.status(400).json({ message: 'Base Image not Set' });
+		// }
+		if (appData.body.b2bBaseImage) {
+			flowBaseImage = appData.body.b2bBaseImage;
 		}
-		let flowBaseImage = appData.body.b2bBaseImage;
-
 		if (config.isK8sEnv()) {
 			doc.image = flowBaseImage;
 			let status = await k8sUtils.deleteDeployment(doc);
@@ -765,10 +763,12 @@ router.get('/:id/yamls', async (req, res) => {
 	try {
 		const doc = await flowModel.findById(req.params.id);
 		const appData = await commonUtils.getApp(req, doc.app);
-		if (!appData.body.b2bBaseImage) {
-			return res.status(400).json({ message: 'Base Image not Set' });
+		// if (!appData.body.b2bBaseImage) {
+		// 	return res.status(400).json({ message: 'Base Image not Set' });
+		// }
+		if (appData.body.b2bBaseImage) {
+			flowBaseImage = appData.body.b2bBaseImage;
 		}
-		let flowBaseImage = appData.body.b2bBaseImage;
 		const namespace = (config.DATA_STACK_NAMESPACE + '-' + doc.app).toLowerCase();
 		const port = 8080;
 		const name = doc.deploymentName;
