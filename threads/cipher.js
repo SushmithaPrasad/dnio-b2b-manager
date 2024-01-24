@@ -1,13 +1,26 @@
 const { workerData, parentPort } = require('worker_threads');
 const crypto = require('crypto');
+const log4js = require('log4js');
+const config = require('../config');
 
 const IV_LENGTH = 16;
 const action = workerData.action;
 const text = workerData.text;
 const encryptionKey = workerData.encryptionKey;
 const appEncryptionKey = workerData.appEncryptionKey;
-
 const SECRET = '34857057658800771270426551038148';
+
+let additionalLoggerIdentifier = 'Worker/Cipher';
+let LOGGER_NAME = `${global.loggerName} [${additionalLoggerIdentifier}]`;
+
+const LOG_LEVEL = global.LOG_LEVEL;
+
+log4js.configure({
+	appenders: { out: { type: 'stdout', layout: { type: 'basic' } } },
+	categories: { default: { appenders: ['out'], level: LOG_LEVEL } }
+});
+let logger = log4js.getLogger(LOGGER_NAME);
+
 
 let resultData;
 try {
@@ -66,11 +79,16 @@ function encrypt(plainText, secret) {
 
 
 function decrypt(cipherText, secret) {
-	const key = crypto.createHash('sha256').update(secret).digest('base64').substring(0, 32);
-	const iv = Buffer.from(cipherText.split(':')[0], 'hex');
-	const textBytes = cipherText.split(':')[1];
-	const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-	let decrypted = decipher.update(textBytes, 'hex', 'utf8');
-	decrypted += decipher.final('utf8');
+	let decrypted;
+	try {
+		const key = crypto.createHash('sha256').update(secret).digest('base64').substring(0, 32);
+		const iv = Buffer.from(cipherText.split(':')[0], 'hex');
+		const textBytes = cipherText.split(':')[1];
+		const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+		decrypted = decipher.update(textBytes, 'hex', 'utf8');
+		decrypted += decipher.final('utf8');
+	} catch (err) {
+		logger.error('Error decrypting text :: ', err);
+	}
 	return decrypted;
 }

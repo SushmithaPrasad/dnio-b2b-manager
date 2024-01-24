@@ -1,20 +1,24 @@
 const log4js = require('log4js');
-const LOG_LEVEL = process.env.LOG_LEVEL ? process.env.LOG_LEVEL : 'info';
+
+const dataStackUtils = require('@appveen/data.stack-utils');
+
 let version = require('./package.json').version;
+
+
+const LOG_LEVEL = process.env.LOG_LEVEL ? process.env.LOG_LEVEL : 'info';
+global.LOG_LEVEL = LOG_LEVEL;
+
+const LOGGER_NAME = isK8sEnv() ? `[${process.env.DATA_STACK_NAMESPACE}] [${process.env.HOSTNAME}] [BM ${version}]` : `[BM ${version}]`;
+global.loggerName = LOGGER_NAME;
 
 log4js.configure({
     appenders: { out: { type: 'stdout', layout: { type: 'basic' } } },
     categories: { default: { appenders: ['out'], level: LOG_LEVEL } }
 });
-const dataStackUtils = require('@appveen/data.stack-utils');
 
-// const LOGGER_NAME = isK8sEnv() ? `[${process.env.HOSTNAME}] [B2B-MANAGER v${process.env.IMAGE_TAG}]` : `[B2B-MANAGER v${process.env.IMAGE_TAG}]`;
-
-const LOGGER_NAME = isK8sEnv() ? `[${process.env.DATA_STACK_NAMESPACE}] [${process.env.HOSTNAME}] [BM ${version}]` : `[BM ${version}]`;
-global.loggerName = LOGGER_NAME;
 const logger = log4js.getLogger(LOGGER_NAME);
-
 global.logger = logger;
+
 
 let envVariables = {};
 
@@ -105,6 +109,9 @@ module.exports = {
     mongoAuthorUrl: process.env.MONGO_AUTHOR_URL || 'mongodb://localhost',
     mongoLogUrl: process.env.MONGO_LOGS_URL || 'mongodb://localhost',
     logsDB: process.env.MONGO_LOGS_DBNAME || 'datastackLogs',
+    dbAuthorUrl: process.env.DB_AUTHOR_URL || process.env.MONGO_AUTHOR_URL || 'mongodb://localhost',
+    dbAppcenterUrl: process.env.DB_APPCENTER_URL || process.env.MONGO_APPCENTER_URL || 'mongodb://localhost',
+    dbLogsUrl: process.env.DB_LOGS_URL || process.env.MONGO_LOGS_URL || 'mongodb://localhost',
     googleKey: envVariables.GOOGLE_API_KEY || '',
     queueName: 'webHooks',
     interactionLogQueueName: 'interactionLogs',
@@ -134,6 +141,20 @@ module.exports = {
         useUnifiedTopology: true,
         useNewUrlParser: true,
         dbName: process.env.MONGO_LOGS_DBNAME || 'datastackLogs'
+    },
+    dbAuthorOptions: {
+        useUnifiedTopology: true,
+        useNewUrlParser: true,
+        dbName: process.env.DB_AUTHOR_DBNAME || process.env.MONGO_AUTHOR_DBNAME || 'datastackConfig',
+    },
+    dbAppcenterOptions: {
+        useUnifiedTopology: true,
+        useNewUrlParser: true,
+    },
+    dbLogsOptions: {
+        useUnifiedTopology: true,
+        useNewUrlParser: true,
+        dbName: process.env.DB_LOGS_DBNAME || process.env.MONGO_LOGS_DBNAME || 'datastackLogs'
     },
     TZ_DEFAULT: envVariables.TZ_DEFAULT || 'Zulu',
     agentMonitoringExpiry: process.env.B2B_HB_LOG_EXPIRY ? parseInt(process.env.B2B_HB_LOG_EXPIRY) : 30 * 60,
